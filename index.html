@@ -202,19 +202,147 @@ const DICT={"一":{p:"yī",r:"один"},"二":{p:"èr",r:"два"},"三":{p:"s�
 function isChinese(ch){const code=ch.charCodeAt(0);return(code>=0x4E00&&code<=0x9FFF)||(code>=0x3400&&code<=0x4DBF)||(code>=0x20000&&code<=0x2A6DF)}
 function splitSentences(text){const sentences=[];let current='';for(const ch of text){current+=ch;if(/[。！？；\n]/.test(ch)){const trimmed=current.trim();if(trimmed)sentences.push(trimmed);current=''}}const remaining=current.trim();if(remaining)sentences.push(remaining);return sentences}
 function getAutoPinyin(ch){if(typeof pinyinPro!=='undefined'&&pinyinPro.pinyin){return pinyinPro.pinyin(ch,{toneType:'symbol',type:'string'}).trim()}return''}
-function parseSentence(sentence){const result=[];let i=0;while(i<sentence.length){let found=false;for(let len=4;len>=2;len--){if(i+len<=sentence.length){const sub=sentence.substring(i,i+len);if(DICT[sub]){result.push({char:sub,pinyin:DICT[sub].p,ru:DICT[sub].r,isChinese:true});i+=len;found=true;break}}}if(!found){const ch=sentence[i];if(isChinese(ch)){const entry=DICT[ch];const pin=entry?entry.p:getAutoPinyin(ch);result.push({char:ch,pinyin:pin,ru:entry?entry.r:'',isChinese:true})}else{const last=result[result.length-1];if(last&&!last.isChinese){last.char+=ch}else{result.push({char:ch,pinyin:'',ru:'',isChinese:false})}}i++}}return result}
+
+// === AI Dictionary System ===
+const AI_DICT_KEY='pinyin_ai_dict';
+let aiDict={};
+let translationQueue=[];
+let isTranslating=false;
+
+// Load AI dictionary from localStorage
+function loadAIDict(){
+  try{
+    const saved=localStorage.getItem(AI_DICT_KEY);
+    if(saved){
+      aiDict=JSON.parse(saved);
+      Object.keys(aiDict).forEach(key=>{
+        if(!DICT[key]){
+          DICT[key]=aiDict[key];
+        }
+      });
+    }
+  }catch(e){console.error('Failed to load AI dict:',e)}
+}
+
+// Save new word to AI dictionary
+function saveToAIDict(char,pinyin,ru){
+  if(!char||!pinyin)return;
+  aiDict[char]={p:pinyin,r:ru||''};
+  DICT[char]={p:pinyin,r:ru||''};
+  try{
+    localStorage.setItem(AI_DICT_KEY,JSON.stringify(aiDict));
+    updateDictInfo();
+  }catch(e){console.error('Failed to save AI dict:',e)}
+}
+
+// Auto-translate unknown character via API
+async function autoTranslateChar(char){
+  if(aiDict[char])return aiDict[char];
+  try{
+    const url=`https://api.mymemory.translated.net/get?q=${encodeURIComponent(char)}&langpair=zh|ru`;
+    const res=await fetch(url);
+    if(!res.ok)throw new Error('API error');
+    const data=await res.json();
+    if(data.responseStatus===200&&data.responseData?.translated){
+      const translation=data.responseData.translated.trim();
+      if(translation&&translation!==char&&!/^[\s\u4e00-\u9fff]+$/.test(translation)){
+        const pinyin=getAutoPinyin(char);
+        saveToAIDict(char,pinyin,translation);
+        return{p:pinyin,r:translation};
+      }
+    }
+  }catch(e){console.error('Auto-translate failed:',e)}
+  return null;
+}
+
+// Process translation queue
+async function processTranslationQueue(){
+  if(isTranslating||translationQueue.length===0)return;
+  isTranslating=true;
+
+  while(translationQueue.length>0){
+    const char=translationQueue.shift();
+    if(!aiDict[char]&&!DICT[char]?.r){
+      await autoTranslateChar(char);
+      await new Promise(r=>setTimeout(r,150));
+    }
+  }
+
+  isTranslating=false;
+  if(activeTab==='pinyin'&&inputText.value.trim()){
+    renderText();
+  }
+}
+
+function updateDictInfo(){
+  const totalWords=Object.keys(DICT).length;
+  const aiWords=Object.keys(aiDict).length;
+  dictInfo.textContent=`${totalWords} слов в словаре`+(aiWords>0?` (${aiWords} добавлено ИИ)`:'');
+}
+
+function parseSentence(sentence){
+  const result=[];
+  let i=0;
+  while(i<sentence.length){
+    let found=false;
+    for(let len=4;len>=2;len--){
+      if(i+len<=sentence.length){
+        const sub=sentence.substring(i,i+len);
+        if(DICT[sub]){
+          result.push({char:sub,pinyin:DICT[sub].p,ru:DICT[sub].r,isChinese:true});
+          i+=len;
+          found=true;
+          break;
+        }
+      }
+    }
+    if(!found){
+      const ch=sentence[i];
+      if(isChinese(ch)){
+        const entry=DICT[ch];
+        const pin=entry?entry.p:getAutoPinyin(ch);
+        const ru=entry?entry.r:'';
+        result.push({char:ch,pinyin:pin,ru:ru,isChinese:true});
+
+        // Queue for auto-translation if no translation
+        if(!ru&&pin&&!translationQueue.includes(ch)){
+          translationQueue.push(ch);
+        }
+      }else{
+        const last=result[result.length-1];
+        if(last&&!last.isChinese){
+          last.char+=ch;
+        }else{
+          result.push({char:ch,pinyin:'',ru:'',isChinese:false});
+        }
+      }
+      i++;
+    }
+  }
+
+  // Start translation queue processing
+  if(translationQueue.length>0&&!isTranslating){
+    setTimeout(processTranslationQueue,500);
+  }
+
+  return result;
+}
+
+// Load AI dictionary on startup
+loadAIDict();
 async function translateSentenceAI(text){if(!text.trim())return'';try{const url=`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=zh|ru`;const res=await fetch(url);if(!res.ok)throw new Error('API error');const data=await res.json();if(data.responseStatus===200&&data.responseData?.translated){const t=data.responseData.translated.trim();if(t&&t!==text&&!/^[\s\u4e00-\u9fff]+$/.test(t))return t}if(data.matches&&data.matches.length>0){const best=data.matches.filter(m=>m.translation&&m.translation!==text).sort((a,b)=>(parseInt(b.quality)||0)-(parseInt(a.quality)||0))[0];if(best?.translation)return best.translation.trim()}throw new Error('Нет перевода')}catch(e){const words=parseSentence(text);return words.filter(w=>w.ru&&isChinese(w.char[0])).map(w=>w.ru).join(', ')||'—'}}
 
 let currentFontSize=32;let showTranslation=true;let activeTab='input';
 const $=id=>document.getElementById(id);
 const inputText=$('inputText'),charCount=$('charCount'),btnGenerate=$('btnGenerate'),btnReset=$('btnReset'),btnBack=$('btnBack'),btnBack2=$('btnBack2'),tabInput=$('tab-input'),tabPinyin=$('tab-pinyin'),textOutput=$('textOutput'),fontControls=$('fontControls'),fontRange=$('fontRange'),fontMinus=$('fontMinus'),fontPlus=$('fontPlus'),sizeValue=$('sizeValue'),showTranslationCb=$('showTranslation'),sentenceList=$('sentenceList'),sentenceListInner=$('sentenceListInner'),examplesGrid=$('examplesGrid'),popover=$('popover'),popoverBackdrop=$('popoverBackdrop'),popoverSentence=$('popoverSentence'),popoverTranslation=$('popoverTranslation'),popoverWords=$('popoverWords'),popoverClose=$('popoverClose'),dictInfo=$('dictInfo');
-dictInfo.textContent=`${Object.keys(DICT).length} слов в словаре`;
+updateDictInfo();
 
 const examples=["你好，我是学生。","今天天气很好，我们去公园吧。","我喜欢学习中文，但是中文很难。","北京是中国的首都，上海是中国最大的城市。","我的朋友住在上海，他在公司工作。","每天早上我起床以后，先喝水，然后吃早饭。"];
 examples.forEach(ex=>{const btn=document.createElement('button');btn.className='example-btn font-hanzi';btn.textContent=ex;btn.onclick=()=>{inputText.value=ex;handleInputChange()};examplesGrid.appendChild(btn)});
 
+let inputDebounceTimer=null;
 function handleInputChange(){const text=inputText.value;charCount.textContent=`${text.length} симв.`;btnGenerate.disabled=!text.trim();const sentences=splitSentences(text);if(sentences.length>0){sentenceList.classList.remove('hidden');sentenceListInner.innerHTML='';sentences.forEach((s,i)=>{const div=document.createElement('div');div.style.cssText='display:flex;align-items:flex-start;gap:12px;padding:10px;border-radius:8px;cursor:pointer;transition:background 0.2s;';div.onmouseenter=()=>div.style.background='#fafaf9';div.onmouseleave=()=>div.style.background='';div.innerHTML=`<span style="font-size:12px;color:#d6d3d1;font-family:monospace;min-width:1.2rem;text-align:right;margin-top:4px;">${i+1}</span><span class="font-hanzi" style="color:#44403c;font-size:18px;line-height:1.6;">${s}</span>`;div.onclick=e=>showPopover(s,div);sentenceListInner.appendChild(div)})}else{sentenceList.classList.add('hidden')}}
-inputText.addEventListener('input',handleInputChange);
+inputText.addEventListener('input',()=>{clearTimeout(inputDebounceTimer);inputDebounceTimer=setTimeout(handleInputChange,300)});
 
 function switchTab(tab){activeTab=tab;document.querySelectorAll('.tab-btn').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));tabInput.classList.toggle('hidden',tab!=='input');tabPinyin.classList.toggle('hidden',tab!=='pinyin');fontControls.classList.toggle('hidden',tab!=='pinyin')}
 document.querySelectorAll('.tab-btn').forEach(btn=>btn.addEventListener('click',()=>switchTab(btn.dataset.tab)));
@@ -446,13 +574,31 @@ const DICT={"一":{p:"yī",r:"один"},"二":{p:"èr",r:"два"},"三":{p:"s�
 
 function isChinese(ch){const code=ch.charCodeAt(0);return(code>=0x4E00&&code<=0x9FFF)||(code>=0x3400&&code<=0x4DBF)||(code>=0x20000&&code<=0x2A6DF)}
 function splitSentences(text){const sentences=[];let current='';for(const ch of text){current+=ch;if(/[。！？；\n]/.test(ch)){const trimmed=current.trim();if(trimmed)sentences.push(trimmed);current=''}}const remaining=current.trim();if(remaining)sentences.push(remaining);return sentences}
-function getAutoPinyin(ch){if(typeof pinyinPro!=='undefined'&&pinyinPro.pinyin){return pinyinPro.pinyin(ch,{toneType:'symbol',type:'string'}).trim()}return''}
+function getAutoPinyin(ch,context=''){
+  if(typeof pinyinPro==='undefined'||!pinyinPro.pinyin)return'';
+
+  // Если есть контекст, используем его для более точного пиньина
+  if(context&&context.length>1){
+    try{
+      // pinyin-pro может анализировать весь текст для контекстного пиньина
+      const fullPinyin=pinyinPro.pinyin(context,{toneType:'symbol',type:'array'});
+      const charIndex=context.indexOf(ch);
+      if(charIndex>=0&&charIndex<fullPinyin.length){
+        return fullPinyin[charIndex].trim();
+      }
+    }catch(e){}
+  }
+
+  // Fallback: одиночный символ
+  return pinyinPro.pinyin(ch,{toneType:'symbol',type:'string'}).trim();
+}
 
 // === AI Dictionary System ===
 const AI_DICT_KEY='pinyin_ai_dict';
 let aiDict={};
 let translationQueue=[];
 let isTranslating=false;
+let pinyinCache={}; // Кэш для пиньина
 
 // Load AI dictionary from localStorage
 function loadAIDict(){
@@ -505,15 +651,30 @@ async function processTranslationQueue(){
   if(isTranslating||translationQueue.length===0)return;
   isTranslating=true;
 
+  let translatedCount=0;
+  const totalToProcess=translationQueue.length;
+
   while(translationQueue.length>0){
     const char=translationQueue.shift();
     if(!aiDict[char]&&!DICT[char]?.r){
-      await autoTranslateChar(char);
-      await new Promise(r=>setTimeout(r,150));
+      const result=await autoTranslateChar(char);
+      if(result){
+        translatedCount++;
+        updateTranslationIndicatorText(translatedCount);
+      }
+      // Задержка для избежания rate limiting
+      await new Promise(r=>setTimeout(r,200));
     }
   }
 
   isTranslating=false;
+
+  // Скрываем индикатор через 2 секунды
+  setTimeout(()=>{
+    hideTranslationIndicator();
+  },2000);
+
+  // Перерисовываем текст если мы на вкладке пиньина
   if(activeTab==='pinyin'&&inputText.value.trim()){
     renderText();
   }
@@ -528,8 +689,13 @@ function updateDictInfo(){
 function parseSentence(sentence){
   const result=[];
   let i=0;
+
+  // Извлекаем только китайские символы для контекстного анализа
+  const chineseContext=sentence.split('').filter(c=>isChinese(c)).join('');
+
   while(i<sentence.length){
     let found=false;
+    // Пробуем найти слова от длинных к коротким
     for(let len=4;len>=2;len--){
       if(i+len<=sentence.length){
         const sub=sentence.substring(i,i+len);
@@ -545,11 +711,12 @@ function parseSentence(sentence){
       const ch=sentence[i];
       if(isChinese(ch)){
         const entry=DICT[ch];
-        const pin=entry?entry.p:getAutoPinyin(ch);
+        // Используем контекст для более точного пиньина
+        const pin=entry?entry.p:getAutoPinyin(ch,chineseContext);
         const ru=entry?entry.r:'';
         result.push({char:ch,pinyin:pin,ru:ru,isChinese:true});
 
-        // Queue for auto-translation if no translation
+        // Добавляем в очередь для автоперевода если нет перевода
         if(!ru&&pin&&!translationQueue.includes(ch)){
           translationQueue.push(ch);
         }
@@ -565,12 +732,40 @@ function parseSentence(sentence){
     }
   }
 
-  // Start translation queue processing
+  // Запускаем обработку очереди переводов
   if(translationQueue.length>0&&!isTranslating){
+    showTranslationIndicator();
     setTimeout(processTranslationQueue,500);
   }
 
   return result;
+}
+
+// Индикатор автоматического перевода
+function showTranslationIndicator(){
+  let indicator=document.getElementById('translationIndicator');
+  if(!indicator){
+    indicator=document.createElement('div');
+    indicator.id='translationIndicator';
+    indicator.style.cssText='position:fixed;bottom:20px;right:20px;background:#292524;color:white;padding:12px 20px;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,0.15);z-index:1000;display:flex;align-items:center;gap:10px;font-size:14px;animation:popIn 0.3s ease-out;';
+    indicator.innerHTML='<div class="spinner" style="width:16px;height:16px;border:2px solid rgba(255,255,255,0.3);border-top-color:white;border-radius:50%;animation:spin 0.8s linear infinite;"></div><span id="translationIndicatorText">ИИ добавляет переводы...</span>';
+    document.body.appendChild(indicator);
+  }
+  indicator.style.display='flex';
+}
+
+function hideTranslationIndicator(){
+  const indicator=document.getElementById('translationIndicator');
+  if(indicator){
+    indicator.style.display='none';
+  }
+}
+
+function updateTranslationIndicatorText(count){
+  const textEl=document.getElementById('translationIndicatorText');
+  if(textEl){
+    textEl.textContent=`ИИ добавил ${count} перевод${count===1?'':'ов'}`;
+  }
 }
 
 // Load AI dictionary on startup
@@ -586,13 +781,67 @@ const examples=["你好，我是学生。","今天天气很好，我们去公园
 examples.forEach(ex=>{const btn=document.createElement('button');btn.className='example-btn font-hanzi';btn.textContent=ex;btn.onclick=()=>{inputText.value=ex;handleInputChange()};examplesGrid.appendChild(btn)});
 
 let inputDebounceTimer=null;
-function handleInputChange(){const text=inputText.value;charCount.textContent=`${text.length} симв.`;btnGenerate.disabled=!text.trim();const sentences=splitSentences(text);if(sentences.length>0){sentenceList.classList.remove('hidden');sentenceListInner.innerHTML='';sentences.forEach((s,i)=>{const div=document.createElement('div');div.style.cssText='display:flex;align-items:flex-start;gap:12px;padding:10px;border-radius:8px;cursor:pointer;transition:background 0.2s;';div.onmouseenter=()=>div.style.background='#fafaf9';div.onmouseleave=()=>div.style.background='';div.innerHTML=`<span style="font-size:12px;color:#d6d3d1;font-family:monospace;min-width:1.2rem;text-align:right;margin-top:4px;">${i+1}</span><span class="font-hanzi" style="color:#44403c;font-size:18px;line-height:1.6;">${s}</span>`;div.onclick=e=>showPopover(s,div);sentenceListInner.appendChild(div)})}else{sentenceList.classList.add('hidden')}}
-inputText.addEventListener('input',()=>{clearTimeout(inputDebounceTimer);inputDebounceTimer=setTimeout(handleInputChange,300)});
+function handleInputChange(){
+  const text=inputText.value;
+  charCount.textContent=`${text.length} симв.`;
+  btnGenerate.disabled=!text.trim();
+  const sentences=splitSentences(text);
+  if(sentences.length>0){
+    sentenceList.classList.remove('hidden');
+    sentenceListInner.innerHTML='';
+    sentences.forEach((s,i)=>{
+      const div=document.createElement('div');
+      div.style.cssText='display:flex;align-items:flex-start;gap:12px;padding:10px;border-radius:8px;cursor:pointer;transition:background 0.2s;';
+      div.onmouseenter=()=>div.style.background='#fafaf9';
+      div.onmouseleave=()=>div.style.background='';
+      div.innerHTML=`<span style="font-size:12px;color:#d6d3d1;font-family:monospace;min-width:1.2rem;text-align:right;margin-top:4px;">${i+1}</span><span class="font-hanzi" style="color:#44403c;font-size:18px;line-height:1.6;">${s}</span>`;
+      div.onclick=e=>showPopover(s,div);
+      sentenceListInner.appendChild(div)
+    })
+  }else{
+    sentenceList.classList.add('hidden')
+  }
+}
+inputText.addEventListener('input',()=>{
+  clearTimeout(inputDebounceTimer);
+  inputDebounceTimer=setTimeout(handleInputChange,300)
+});
 
 function switchTab(tab){activeTab=tab;document.querySelectorAll('.tab-btn').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));tabInput.classList.toggle('hidden',tab!=='input');tabPinyin.classList.toggle('hidden',tab!=='pinyin');fontControls.classList.toggle('hidden',tab!=='pinyin')}
 document.querySelectorAll('.tab-btn').forEach(btn=>btn.addEventListener('click',()=>switchTab(btn.dataset.tab)));
 
-function renderText(){const text=inputText.value;const sentences=splitSentences(text);textOutput.innerHTML='';sentences.forEach(sentence=>{const chars=parseSentence(sentence);const wrap=document.createElement('div');wrap.className='sentence-block-wrap';const block=document.createElement('div');block.className='sentence-block';block.onclick=e=>showPopover(sentence,block);chars.forEach(ch=>{if(!ch.isChinese){const span=document.createElement('span');span.className='char-non-hanzi';span.style.fontSize=`${currentFontSize*0.5}px`;span.style.lineHeight=`${currentFontSize}px`;span.textContent=ch.char===' '?'\u00A0':ch.char;block.appendChild(span);return}const cell=document.createElement('div');cell.className='char-cell';const cellWidth=currentFontSize*1.2*ch.char.length;cell.style.width=`${cellWidth}px`;const pEl=document.createElement('span');pEl.className='char-pinyin';pEl.style.fontSize=`${Math.max(10,Math.round(currentFontSize*0.38))}px`;pEl.style.height=`${Math.max(10,Math.round(currentFontSize*0.38))+2}px`;pEl.style.lineHeight=`${Math.max(10,Math.round(currentFontSize*0.38))+2}px`;pEl.textContent=ch.pinyin;cell.appendChild(pEl);const hEl=document.createElement('span');hEl.className='char-hanzi font-hanzi';hEl.style.fontSize=`${currentFontSize}px`;hEl.style.height=`${currentFontSize}px`;hEl.style.lineHeight=`${currentFontSize}px`;hEl.style.width=`${cellWidth}px`;hEl.style.marginTop='2px';hEl.textContent=ch.char;cell.appendChild(hEl);const ruSize=Math.max(9,Math.round(currentFontSize*0.28));if(showTranslation&&ch.ru){const rEl=document.createElement('span');rEl.className='char-ru';rEl.style.fontSize=`${ruSize}px`;rEl.style.height=`${ruSize+2}px`;rEl.style.lineHeight=`${ruSize+2}px`;rEl.style.width=`${cellWidth+20}px`;rEl.style.marginTop='3px';rEl.textContent=ch.ru;cell.appendChild(rEl)}else{const spacer=document.createElement('span');spacer.style.display='block';spacer.style.height=`${ruSize+5}px`;cell.appendChild(spacer)}block.appendChild(cell)});wrap.appendChild(block);if(showTranslation){const hint=document.createElement('div');hint.className='sentence-hint';hint.style.fontSize=`${Math.max(11,Math.round(currentFontSize*0.28)+1)}px`;hint.innerHTML='<span style="font-size:0.65em;margin-right:4px;">🤖</span>Кликните для ИИ-перевода';wrap.appendChild(hint)}textOutput.appendChild(wrap)})}
+function editPinyin(charObj,pEl){
+  const input=document.createElement('input');
+  input.type='text';
+  input.value=charObj.pinyin;
+  input.style.cssText=`font-size:${pEl.style.fontSize};font-family:monospace;width:80px;text-align:center;border:1px solid #dc2626;border-radius:4px;padding:2px 4px;outline:none;background:white;`;
+
+  const saveEdit=()=>{
+    const newPinyin=input.value.trim();
+    if(newPinyin&&newPinyin!==charObj.pinyin){
+      charObj.pinyin=newPinyin;
+      if(isChinese(charObj.char[0])){
+        saveToAIDict(charObj.char,newPinyin,charObj.ru);
+      }
+      pEl.textContent=charObj.pinyin;
+    }
+    pEl.style.display='';
+    input.remove();
+  };
+
+  input.onblur=saveEdit;
+  input.onkeydown=(e)=>{
+    if(e.key==='Enter')saveEdit();
+    else if(e.key==='Escape'){pEl.style.display='';input.remove();}
+  };
+
+  pEl.style.display='none';
+  pEl.parentElement.insertBefore(input,pEl);
+  input.focus();
+  input.select();
+}
+
+function renderText(){const text=inputText.value;const sentences=splitSentences(text);textOutput.innerHTML='';sentences.forEach(sentence=>{const chars=parseSentence(sentence);const wrap=document.createElement('div');wrap.className='sentence-block-wrap';const block=document.createElement('div');block.className='sentence-block';block.onclick=e=>showPopover(sentence,block);chars.forEach(ch=>{if(!ch.isChinese){const span=document.createElement('span');span.className='char-non-hanzi';span.style.fontSize=`${currentFontSize*0.5}px`;span.style.lineHeight=`${currentFontSize}px`;span.textContent=ch.char===' '?'\u00A0':ch.char;block.appendChild(span);return}const cell=document.createElement('div');cell.className='char-cell';const cellWidth=currentFontSize*1.2*ch.char.length;cell.style.width=`${cellWidth}px`;const pEl=document.createElement('span');pEl.className='char-pinyin';pEl.style.fontSize=`${Math.max(10,Math.round(currentFontSize*0.38))}px`;pEl.style.height=`${Math.max(10,Math.round(currentFontSize*0.38))+2}px`;pEl.style.lineHeight=`${Math.max(10,Math.round(currentFontSize*0.38))+2}px`;pEl.textContent=ch.pinyin;pEl.style.cursor='pointer';pEl.title='Кликните для редактирования пиньина';pEl.onclick=(e)=>{e.stopPropagation();editPinyin(ch,pEl);};cell.appendChild(pEl);const hEl=document.createElement('span');hEl.className='char-hanzi font-hanzi';hEl.style.fontSize=`${currentFontSize}px`;hEl.style.height=`${currentFontSize}px`;hEl.style.lineHeight=`${currentFontSize}px`;hEl.style.width=`${cellWidth}px`;hEl.style.marginTop='2px';hEl.textContent=ch.char;cell.appendChild(hEl);const ruSize=Math.max(9,Math.round(currentFontSize*0.28));if(showTranslation&&ch.ru){const rEl=document.createElement('span');rEl.className='char-ru';rEl.style.fontSize=`${ruSize}px`;rEl.style.height=`${ruSize+2}px`;rEl.style.lineHeight=`${ruSize+2}px`;rEl.style.width=`${cellWidth+20}px`;rEl.style.marginTop='3px';rEl.textContent=ch.ru;cell.appendChild(rEl)}else{const spacer=document.createElement('span');spacer.style.display='block';spacer.style.height=`${ruSize+5}px`;cell.appendChild(spacer)}block.appendChild(cell)});wrap.appendChild(block);if(showTranslation){const hint=document.createElement('div');hint.className='sentence-hint';hint.style.fontSize=`${Math.max(11,Math.round(currentFontSize*0.28)+1)}px`;hint.innerHTML='<span style="font-size:0.65em;margin-right:4px;">🤖</span>Кликните для ИИ-перевода';wrap.appendChild(hint)}textOutput.appendChild(wrap)})}
 
 btnGenerate.addEventListener('click',()=>{if(inputText.value.trim()){renderText();switchTab('pinyin')}});
 btnReset.addEventListener('click',()=>{inputText.value='';handleInputChange();switchTab('input')});
