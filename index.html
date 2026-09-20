@@ -1,3 +1,4 @@
+--- index.html (原始)
 <!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -200,6 +201,251 @@ const DICT={"一":{p:"yī",r:"один"},"二":{p:"èr",r:"два"},"三":{p:"s�
 function isChinese(ch){const code=ch.charCodeAt(0);return(code>=0x4E00&&code<=0x9FFF)||(code>=0x3400&&code<=0x4DBF)||(code>=0x20000&&code<=0x2A6DF)}
 function splitSentences(text){const sentences=[];let current='';for(const ch of text){current+=ch;if(/[。！？；\n]/.test(ch)){const trimmed=current.trim();if(trimmed)sentences.push(trimmed);current=''}}const remaining=current.trim();if(remaining)sentences.push(remaining);return sentences}
 function parseSentence(sentence){const result=[];let i=0;while(i<sentence.length){let found=false;for(let len=4;len>=2;len--){if(i+len<=sentence.length){const sub=sentence.substring(i,i+len);if(DICT[sub]){result.push({char:sub,pinyin:DICT[sub].p,ru:DICT[sub].r,isChinese:true});i+=len;found=true;break}}}if(!found){const ch=sentence[i];if(isChinese(ch)){const entry=DICT[ch];result.push({char:ch,pinyin:entry?entry.p:'',ru:entry?entry.r:'',isChinese:true})}else{const last=result[result.length-1];if(last&&!last.isChinese){last.char+=ch}else{result.push({char:ch,pinyin:'',ru:'',isChinese:false})}}i++}}return result}
+async function translateSentenceAI(text){if(!text.trim())return'';try{const url=`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=zh|ru`;const res=await fetch(url);if(!res.ok)throw new Error('API error');const data=await res.json();if(data.responseStatus===200&&data.responseData?.translated){const t=data.responseData.translated.trim();if(t&&t!==text&&!/^[\s\u4e00-\u9fff]+$/.test(t))return t}if(data.matches&&data.matches.length>0){const best=data.matches.filter(m=>m.translation&&m.translation!==text).sort((a,b)=>(parseInt(b.quality)||0)-(parseInt(a.quality)||0))[0];if(best?.translation)return best.translation.trim()}throw new Error('Нет перевода')}catch(e){const words=parseSentence(text);return words.filter(w=>w.ru&&isChinese(w.char[0])).map(w=>w.ru).join(', ')||'—'}}
+
+let currentFontSize=32;let showTranslation=true;let activeTab='input';
+const $=id=>document.getElementById(id);
+const inputText=$('inputText'),charCount=$('charCount'),btnGenerate=$('btnGenerate'),btnReset=$('btnReset'),btnBack=$('btnBack'),btnBack2=$('btnBack2'),tabInput=$('tab-input'),tabPinyin=$('tab-pinyin'),textOutput=$('textOutput'),fontControls=$('fontControls'),fontRange=$('fontRange'),fontMinus=$('fontMinus'),fontPlus=$('fontPlus'),sizeValue=$('sizeValue'),showTranslationCb=$('showTranslation'),sentenceList=$('sentenceList'),sentenceListInner=$('sentenceListInner'),examplesGrid=$('examplesGrid'),popover=$('popover'),popoverBackdrop=$('popoverBackdrop'),popoverSentence=$('popoverSentence'),popoverTranslation=$('popoverTranslation'),popoverWords=$('popoverWords'),popoverClose=$('popoverClose'),dictInfo=$('dictInfo');
+dictInfo.textContent=`${Object.keys(DICT).length} слов в словаре`;
+
+const examples=["你好，我是学生。","今天天气很好，我们去公园吧。","我喜欢学习中文，但是中文很难。","北京是中国的首都，上海是中国最大的城市。","我的朋友住在上海，他在公司工作。","每天早上我起床以后，先喝水，然后吃早饭。"];
+examples.forEach(ex=>{const btn=document.createElement('button');btn.className='example-btn font-hanzi';btn.textContent=ex;btn.onclick=()=>{inputText.value=ex;handleInputChange()};examplesGrid.appendChild(btn)});
+
+function handleInputChange(){const text=inputText.value;charCount.textContent=`${text.length} симв.`;btnGenerate.disabled=!text.trim();const sentences=splitSentences(text);if(sentences.length>0){sentenceList.classList.remove('hidden');sentenceListInner.innerHTML='';sentences.forEach((s,i)=>{const div=document.createElement('div');div.style.cssText='display:flex;align-items:flex-start;gap:12px;padding:10px;border-radius:8px;cursor:pointer;transition:background 0.2s;';div.onmouseenter=()=>div.style.background='#fafaf9';div.onmouseleave=()=>div.style.background='';div.innerHTML=`<span style="font-size:12px;color:#d6d3d1;font-family:monospace;min-width:1.2rem;text-align:right;margin-top:4px;">${i+1}</span><span class="font-hanzi" style="color:#44403c;font-size:18px;line-height:1.6;">${s}</span>`;div.onclick=e=>showPopover(s,div);sentenceListInner.appendChild(div)})}else{sentenceList.classList.add('hidden')}}
+inputText.addEventListener('input',handleInputChange);
+
+function switchTab(tab){activeTab=tab;document.querySelectorAll('.tab-btn').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));tabInput.classList.toggle('hidden',tab!=='input');tabPinyin.classList.toggle('hidden',tab!=='pinyin');fontControls.classList.toggle('hidden',tab!=='pinyin')}
+document.querySelectorAll('.tab-btn').forEach(btn=>btn.addEventListener('click',()=>switchTab(btn.dataset.tab)));
+
+function renderText(){const text=inputText.value;const sentences=splitSentences(text);textOutput.innerHTML='';sentences.forEach(sentence=>{const chars=parseSentence(sentence);const wrap=document.createElement('div');wrap.className='sentence-block-wrap';const block=document.createElement('div');block.className='sentence-block';block.onclick=e=>showPopover(sentence,block);chars.forEach(ch=>{if(!ch.isChinese){const span=document.createElement('span');span.className='char-non-hanzi';span.style.fontSize=`${currentFontSize*0.5}px`;span.style.lineHeight=`${currentFontSize}px`;span.textContent=ch.char===' '?'\u00A0':ch.char;block.appendChild(span);return}const cell=document.createElement('div');cell.className='char-cell';const cellWidth=currentFontSize*1.2*ch.char.length;cell.style.width=`${cellWidth}px`;const pEl=document.createElement('span');pEl.className='char-pinyin';pEl.style.fontSize=`${Math.max(10,Math.round(currentFontSize*0.38))}px`;pEl.style.height=`${Math.max(10,Math.round(currentFontSize*0.38))+2}px`;pEl.style.lineHeight=`${Math.max(10,Math.round(currentFontSize*0.38))+2}px`;pEl.textContent=ch.pinyin;cell.appendChild(pEl);const hEl=document.createElement('span');hEl.className='char-hanzi font-hanzi';hEl.style.fontSize=`${currentFontSize}px`;hEl.style.height=`${currentFontSize}px`;hEl.style.lineHeight=`${currentFontSize}px`;hEl.style.width=`${cellWidth}px`;hEl.style.marginTop='2px';hEl.textContent=ch.char;cell.appendChild(hEl);const ruSize=Math.max(9,Math.round(currentFontSize*0.28));if(showTranslation&&ch.ru){const rEl=document.createElement('span');rEl.className='char-ru';rEl.style.fontSize=`${ruSize}px`;rEl.style.height=`${ruSize+2}px`;rEl.style.lineHeight=`${ruSize+2}px`;rEl.style.width=`${cellWidth+20}px`;rEl.style.marginTop='3px';rEl.textContent=ch.ru;cell.appendChild(rEl)}else{const spacer=document.createElement('span');spacer.style.display='block';spacer.style.height=`${ruSize+5}px`;cell.appendChild(spacer)}block.appendChild(cell)});wrap.appendChild(block);if(showTranslation){const hint=document.createElement('div');hint.className='sentence-hint';hint.style.fontSize=`${Math.max(11,Math.round(currentFontSize*0.28)+1)}px`;hint.innerHTML='<span style="font-size:0.65em;margin-right:4px;">🤖</span>Кликните для ИИ-перевода';wrap.appendChild(hint)}textOutput.appendChild(wrap)})}
+
+btnGenerate.addEventListener('click',()=>{if(inputText.value.trim()){renderText();switchTab('pinyin')}});
+btnReset.addEventListener('click',()=>{inputText.value='';handleInputChange();switchTab('input')});
+btnBack.addEventListener('click',()=>switchTab('input'));
+btnBack2.addEventListener('click',()=>switchTab('input'));
+showTranslationCb.addEventListener('change',()=>{showTranslation=showTranslationCb.checked;renderText()});
+
+function updateFontSize(size){currentFontSize=Math.max(18,Math.min(72,size));fontRange.value=currentFontSize;sizeValue.textContent=currentFontSize;fontMinus.disabled=currentFontSize<=18;fontPlus.disabled=currentFontSize>=72;if(activeTab==='pinyin')renderText()}
+fontRange.addEventListener('input',e=>updateFontSize(parseInt(e.target.value)));
+fontMinus.addEventListener('click',()=>updateFontSize(currentFontSize-4));
+fontPlus.addEventListener('click',()=>updateFontSize(currentFontSize+4));
+
+function showPopover(sentence,anchorEl){popoverSentence.textContent=sentence;popoverTranslation.innerHTML='<div class="popover-loading"><div class="spinner"></div><span>Перевожу...</span></div>';const words=parseSentence(sentence);popoverWords.innerHTML='';words.forEach(w=>{const row=document.createElement('div');row.className='word-row';row.innerHTML=`<span class="word-char font-hanzi">${w.char}</span>${w.pinyin?`<span class="word-pinyin">${w.pinyin}</span>`:''}${w.ru?`<span class="word-ru">${w.ru}</span>`:''}`;popoverWords.appendChild(row)});const rect=anchorEl.getBoundingClientRect();const popoverWidth=Math.min(440,window.innerWidth-20);let left=rect.left+rect.width/2-popoverWidth/2;if(left<10)left=10;if(left+popoverWidth>window.innerWidth-10)left=window.innerWidth-popoverWidth-10;let top=rect.bottom+8;if(top+400>window.innerHeight)top=Math.max(10,rect.top-400);popover.style.top=`${top}px`;popover.style.left=`${left}px`;popover.style.width=`${popoverWidth}px`;popover.classList.add('active');popoverBackdrop.classList.add('active');translateSentenceAI(sentence).then(t=>{popoverTranslation.innerHTML=`<div class="popover-translation-text">${t}</div>`}).catch(()=>{popoverTranslation.innerHTML='<div style="color:#ef4444;font-size:14px;">⚠️ Ошибка перевода</div>'})}
+function hidePopover(){popover.classList.remove('active');popoverBackdrop.classList.remove('active')}
+popoverClose.addEventListener('click',hidePopover);
+popoverBackdrop.addEventListener('click',hidePopover);
+updateFontSize(32);
+</script>
+
+</body>
+</html>
+
+
++++ index.html (修改后)
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>汉字拼音助手 — Пиньинь над иероглифами</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Noto Sans SC','PingFang SC','Microsoft YaHei',sans-serif;background:#fafaf9;color:#292524;min-height:100vh;display:flex;flex-direction:column}
+.font-hanzi{font-family:'Noto Serif SC','Source Han Serif SC','SimSun','STSong','PingFang SC','Microsoft YaHei',serif}
+header{background:#fff;border-bottom:1px solid #e7e5e4;position:sticky;top:0;z-index:30}
+.header-inner{max-width:1200px;margin:0 auto;padding:0 1rem;height:56px;display:flex;align-items:center;justify-content:space-between}
+.logo{display:flex;align-items:center;gap:.75rem}
+.logo-icon{width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,#dc2626,#b91c1c);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px}
+.logo h1{font-size:14px;font-weight:600}
+.logo p{font-size:10px;color:#a8a29e}
+.tabs{background:#fff;border-bottom:1px solid #e7e5e4}
+.tabs-inner{max-width:1200px;margin:0 auto;padding:0 1rem;display:flex;align-items:center;justify-content:space-between;gap:1rem}
+.tabs nav{display:flex;gap:2px}
+.tab-btn{padding:12px 16px;font-size:14px;font-weight:500;background:0 0;border:none;border-bottom:2px solid transparent;color:#78716c;cursor:pointer;transition:all .2s}
+.tab-btn:hover{color:#44403c;border-bottom-color:#d6d3d1}
+.tab-btn.active{color:#b91c1c;border-bottom-color:#dc2626}
+.font-controls{display:flex;align-items:center;gap:8px;padding:8px 0}
+.font-controls span{font-size:12px;color:#a8a29e}
+.font-controls button{width:28px;height:28px;border-radius:6px;background:#f5f5f4;border:none;color:#57534e;font-weight:700;cursor:pointer;transition:background .2s}
+.font-controls button:hover:not(:disabled){background:#e7e5e4}
+.font-controls button:disabled{opacity:.3;cursor:not-allowed}
+.font-controls input[type=range]{width:112px;accent-color:#dc2626}
+.font-controls .size-value{font-size:12px;color:#a8a29e;min-width:2.5rem;text-align:center;font-family:monospace}
+main{flex:1;max-width:1200px;margin:0 auto;padding:20px 1rem;width:100%}
+.card{background:#fff;border:1px solid #e7e5e4;border-radius:12px;box-shadow:0 1px 2px rgba(0,0,0,.03);overflow:hidden;margin-bottom:16px}
+.card-header{padding:10px 20px;border-bottom:1px solid #f5f5f4;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px}
+.card-header h2{font-size:14px;font-weight:600;color:#44403c;display:flex;align-items:center;gap:8px}
+.badge{font-size:11px;color:#a8a29e;background:#fafaf9;padding:2px 8px;border-radius:999px}
+.info-bar{padding:6px 20px;background:rgba(250,250,249,.8);border-bottom:1px solid #f5f5f4;font-size:11px;color:#a8a29e;display:flex;flex-wrap:wrap;gap:16px}
+textarea{width:100%;height:144px;padding:20px;font-size:20px;border:none;outline:none;resize:none;line-height:2;font-family:inherit}
+textarea::placeholder{color:#d6d3d1}
+.btn-row{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}
+.btn{padding:8px 16px;border-radius:8px;border:none;font-size:14px;font-weight:500;cursor:pointer;transition:all .2s;box-shadow:0 1px 2px rgba(0,0,0,.05)}
+.btn-primary{background:#dc2626;color:#fff}
+.btn-primary:hover:not(:disabled){background:#b91c1c;box-shadow:0 4px 6px rgba(0,0,0,.1)}
+.btn-primary:disabled{opacity:.4;cursor:not-allowed}
+.btn-secondary{background:#f5f5f4;color:#57534e}
+.btn-secondary:hover{background:#e7e5e4}
+.btn-link{background:0 0;border:none;color:#78716c;font-size:12px;cursor:pointer;padding:8px 16px}
+.btn-link:hover{color:#44403c}
+.checkbox-wrap{display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none}
+.checkbox-wrap input{width:14px;height:14px;accent-color:#dc2626}
+.checkbox-wrap span{font-size:12px;color:#78716c}
+.examples{background:#fff;border:1px solid #e7e5e4;border-radius:12px;padding:16px;margin-bottom:16px}
+.examples h3{font-size:14px;font-weight:600;color:#44403c;margin-bottom:10px;display:flex;align-items:center;gap:8px}
+.examples-grid{display:flex;flex-wrap:wrap;gap:8px}
+.example-btn{padding:6px 12px;background:#fafaf9;border:1px solid #e7e5e4;border-radius:8px;font-size:14px;color:#44403c;cursor:pointer;transition:all .2s}
+.example-btn:hover{background:#fffbeb;border-color:#fde68a}
+.text-display{padding:32px;overflow-x:auto}
+.sentence-block-wrap{margin-bottom:24px}
+.sentence-block-wrap:last-child{margin-bottom:0}
+.sentence-block{display:inline-flex;flex-wrap:wrap;align-items:flex-end;cursor:pointer;padding:4px;margin:-4px;border-radius:8px;transition:background .2s;margin-right:4px}
+.sentence-block:hover{background:rgba(254,243,199,.6)}
+.char-cell{display:inline-flex;flex-direction:column;align-items:center;flex-shrink:0}
+.char-pinyin{color:#a8a29e;font-family:monospace;line-height:1;user-select:none;text-align:center;white-space:nowrap}
+.char-hanzi{color:#292524;line-height:1;text-align:center;margin-top:2px}
+.char-ru{color:#a8a29e;line-height:1;text-align:center;margin-top:3px;max-width:calc(100% + 20px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:0;transition:opacity .2s}
+.sentence-block:hover .char-ru{opacity:1}
+.char-non-hanzi{color:#d6d3d1;line-height:1;padding:0 2px}
+.sentence-hint{margin-top:8px;padding-left:12px;color:#a8a29e;font-style:italic;border-left:2px solid #e7e5e4;margin-left:4px;opacity:0;transition:opacity .2s;font-size:12px}
+.sentence-block-wrap:hover .sentence-hint{opacity:1}
+.popover-backdrop{position:fixed;inset:0;z-index:40;display:none}
+.popover-backdrop.active{display:block}
+.popover{position:fixed;z-index:50;width:440px;max-width:92vw;background:#fff;border-radius:16px;box-shadow:0 25px 50px -12px rgba(0,0,0,.25);border:1px solid #e7e5e4;overflow:hidden;animation:popIn .2s cubic-bezier(.16,1,.3,1);display:none}
+.popover.active{display:block}
+@keyframes popIn{from{opacity:0;transform:scale(.97) translateY(-4px)}to{opacity:1;transform:scale(1) translateY(0)}}
+.popover-header{background:linear-gradient(to right,#292524,#44403c);padding:12px 20px;display:flex;align-items:center;justify-content:space-between}
+.popover-header span{color:rgba(255,255,255,.9);font-size:14px;font-weight:500;display:flex;align-items:center;gap:8px}
+.popover-header button{background:0 0;border:none;color:rgba(255,255,255,.6);font-size:20px;cursor:pointer;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;transition:all .2s}
+.popover-header button:hover{color:#fff;background:rgba(255,255,255,.1)}
+.popover-sentence{padding:12px 20px;border-bottom:1px solid #f5f5f4;font-size:20px;color:#292524;line-height:1.6}
+.popover-translation{padding:16px 20px;background:linear-gradient(to bottom right,rgba(255,251,235,.8),rgba(255,247,237,.4));border-bottom:1px solid #f5f5f4}
+.popover-translation-label{font-size:11px;color:#a8a29e;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;font-weight:500;display:flex;align-items:center;gap:6px}
+.popover-translation-text{color:#292524;font-weight:500;font-size:16px;line-height:1.5}
+.popover-loading{display:flex;align-items:center;gap:8px;color:#a8a29e;font-size:14px}
+.spinner{width:16px;height:16px;border:2px solid #d6d3d1;border-top-color:#57534e;border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.popover-words{padding:12px 20px;max-height:192px;overflow-y:auto}
+.popover-words-label{font-size:11px;color:#a8a29e;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;font-weight:500}
+.word-row{display:flex;align-items:baseline;gap:12px;font-size:14px;margin-bottom:6px}
+.word-row:last-child{margin-bottom:0}
+.word-char{font-size:18px;color:#292524;min-width:2rem}
+.word-pinyin{font-size:12px;color:#a8a29e;min-width:4rem;font-family:monospace}
+.word-ru{color:#57534e}
+footer{border-top:1px solid #e7e5e4;background:#fff;padding:12px 1rem;margin-top:auto}
+.footer-inner{max-width:1200px;margin:0 auto;display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;font-size:12px;color:#a8a29e}
+.hidden{display:none!important}
+@media (max-width:640px){.font-controls{display:none}.text-display{padding:20px}.logo p{display:none}}
+</style>
+</head>
+<body>
+
+<header>
+<div class="header-inner">
+<div class="logo">
+<div class="logo-icon font-hanzi">字</div>
+<div>
+<h1>汉字拼音助手</h1>
+<p>Пиньинь • ИИ-перевод</p>
+</div>
+</div>
+</div>
+</header>
+
+<div class="tabs">
+<div class="tabs-inner">
+<nav>
+<button class="tab-btn active" data-tab="input">✏️ Ввод</button>
+<button class="tab-btn" data-tab="pinyin">📖 Пиньинь</button>
+</nav>
+<div class="font-controls hidden" id="fontControls">
+<span>Размер:</span>
+<button id="fontMinus">−</button>
+<input type="range" id="fontRange" min="18" max="72" step="2" value="32">
+<button id="fontPlus">+</button>
+<span class="size-value" id="sizeValue">32</span>
+</div>
+</div>
+</div>
+
+<main>
+<div id="tab-input">
+<div class="card">
+<div class="card-header">
+<h2>✏️ Китайский текст</h2>
+<span class="badge" id="charCount">0 симв.</span>
+</div>
+<textarea id="inputText" placeholder="Вставьте сюда китайский текст иероглифами..."></textarea>
+</div>
+<div class="btn-row">
+<button class="btn btn-primary" id="btnGenerate" disabled>Показать пиньинь →</button>
+<button class="btn btn-secondary" id="btnReset">Очистить</button>
+</div>
+<div class="examples">
+<h3>💡 Примеры</h3>
+<div class="examples-grid" id="examplesGrid"></div>
+</div>
+<div class="examples hidden" id="sentenceList">
+<h3>📝 Предложения <span style="font-size:11px;color:#a8a29e;font-weight:normal;margin-left:4px;">— кликните для перевода</span></h3>
+<div id="sentenceListInner"></div>
+</div>
+</div>
+
+<div id="tab-pinyin" class="hidden">
+<div class="card">
+<div class="card-header">
+<h2>📖 Текст с пиньинем</h2>
+<div style="display:flex;align-items:center;gap:12px;">
+<label class="checkbox-wrap">
+<input type="checkbox" id="showTranslation" checked>
+<span>Перевод</span>
+</label>
+<button class="btn-link" id="btnBack">← Изменить</button>
+</div>
+</div>
+<div class="info-bar">
+<span>🤖 Кликните на предложение для ИИ-перевода</span>
+</div>
+<div class="text-display">
+<div id="textOutput"></div>
+</div>
+</div>
+<button class="btn btn-secondary" id="btnBack2">← Изменить текст</button>
+</div>
+</main>
+
+<div class="popover-backdrop" id="popoverBackdrop"></div>
+<div class="popover" id="popover">
+<div class="popover-header">
+<span>🤖 Перевод</span>
+<button id="popoverClose">×</button>
+</div>
+<div class="popover-sentence font-hanzi" id="popoverSentence"></div>
+<div class="popover-translation">
+<div class="popover-translation-label">✨ Перевод</div>
+<div id="popoverTranslation"></div>
+</div>
+<div class="popover-words">
+<div class="popover-words-label">Пословный разбор</div>
+<div id="popoverWords"></div>
+</div>
+</div>
+
+<footer>
+<div class="footer-inner">
+<span>汉字拼音助手</span>
+<span id="dictInfo">Словарь загружен</span>
+</div>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/pinyin-pro@3.26.0/dist/index.js"></script>
+<script>
+const DICT={"一":{p:"yī",r:"один"},"二":{p:"èr",r:"два"},"三":{p:"sān",r:"три"},"四":{p:"sì",r:"четыре"},"五":{p:"wǔ",r:"пять"},"六":{p:"liù",r:"шесть"},"七":{p:"qī",r:"семь"},"八":{p:"bā",r:"восемь"},"九":{p:"jiǔ",r:"девять"},"十":{p:"shí",r:"десять"},"百":{p:"bǎi",r:"сто"},"千":{p:"qiān",r:"тысяча"},"万":{p:"wàn",r:"десять тысяч"},"零":{p:"líng",r:"ноль"},"两":{p:"liǎng",r:"два (пара)"},"几":{p:"jǐ",r:"сколько"},"多少":{p:"duōshao",r:"сколько"},"我":{p:"wǒ",r:"я"},"你":{p:"nǐ",r:"ты"},"他":{p:"tā",r:"он"},"她":{p:"tā",r:"она"},"它":{p:"tā",r:"оно"},"我们":{p:"wǒmen",r:"мы"},"你们":{p:"nǐmen",r:"вы"},"他们":{p:"tāmen",r:"они"},"自己":{p:"zìjǐ",r:"сам"},"这":{p:"zhè",r:"этот"},"这里":{p:"zhèlǐ",r:"здесь"},"那":{p:"nà",r:"тот"},"那里":{p:"nàlǐ",r:"там"},"什么":{p:"shénme",r:"что"},"谁":{p:"shéi",r:"кто"},"哪":{p:"nǎ",r:"какой, где"},"怎么":{p:"zěnme",r:"как, почему"},"为什么":{p:"wèishénme",r:"почему"},"是":{p:"shì",r:"быть"},"有":{p:"yǒu",r:"иметь"},"在":{p:"zài",r:"в, находиться"},"不":{p:"bù",r:"не"},"没":{p:"méi",r:"не"},"没有":{p:"méiyǒu",r:"не иметь"},"去":{p:"qù",r:"идти"},"来":{p:"lái",r:"приходить"},"吃":{p:"chī",r:"есть"},"喝":{p:"hē",r:"пить"},"看":{p:"kàn",r:"смотреть"},"听":{p:"tīng",r:"слушать"},"说":{p:"shuō",r:"говорить"},"读":{p:"dú",r:"читать"},"写":{p:"xiě",r:"писать"},"学":{p:"xué",r:"учиться"},"学习":{p:"xuéxí",r:"учиться"},"做":{p:"zuò",r:"делать"},"想":{p:"xiǎng",r:"хотеть, думать"},"要":{p:"yào",r:"хотеть"},"能":{p:"néng",r:"мочь"},"会":{p:"huì",r:"уметь"},"可以":{p:"kěyǐ",r:"可以"},"喜欢":{p:"xǐhuan",r:"нравиться"},"爱":{p:"ài",r:"любить"},"知道":{p:"zhīdào",r:"знать"},"觉得":{p:"juéde",r:"считать"},"认识":{p:"rènshi",r:"знать (кого-то)"},"买":{p:"mǎi",r:"покупать"},"卖":{p:"mài",r:"продавать"},"开":{p:"kāi",r:"открывать"},"关":{p:"guān",r:"закрывать"},"走":{p:"zǒu",r:"идти"},"跑":{p:"pǎo",r:"бежать"},"坐":{p:"zuò",r:"сидеть"},"站":{p:"zhàn",r:"стоять"},"住":{p:"zhù",r:"жить"},"回":{p:"huí",r:"возвращаться"},"到":{p:"dào",r:"прибывать"},"给":{p:"gěi",r:"давать"},"找":{p:"zhǎo",r:"искать"},"等":{p:"děng",r:"ждать"},"问":{p:"wèn",r:"спрашивать"},"回答":{p:"huídá",r:"отвечать"},"叫":{p:"jiào",r:"звать"},"请":{p:"qǐng",r:"пожалуйста"},"谢谢":{p:"xièxie",r:"спасибо"},"对":{p:"duì",r:"правильный"},"错":{p:"cuò",r:"ошибка"},"工作":{p:"gōngzuò",r:"работать"},"休息":{p:"xiūxi",r:"отдыхать"},"睡觉":{p:"shuìjiào",r:"спать"},"起床":{p:"qǐchuáng",r:"вставать"},"穿":{p:"chuān",r:"одевать"},"打":{p:"dǎ",r:"бить"},"玩":{p:"wán",r:"играть"},"教":{p:"jiāo",r:"учить"},"用":{p:"yòng",r:"использовать"},"送":{p:"sòng",r:"дарить"},"开始":{p:"kāishǐ",r:"начинать"},"帮助":{p:"bāngzhù",r:"помогать"},"告诉":{p:"gàosù",r:"рассказывать"},"希望":{p:"xīwàng",r:"надеяться"},"相信":{p:"xiāngxìn",r:"верить"},"需要":{p:"xūyào",r:"нуждаться"},"应该":{p:"yīnggāi",r:"должен"},"必须":{p:"bìxū",r:"обязательно"},"让":{p:"ràng",r:"позволять"},"放":{p:"fàng",r:"класть"},"拿":{p:"ná",r:"брать"},"带":{p:"dài",r:"нести"},"进":{p:"jìn",r:"входить"},"出":{p:"chū",r:"выходить"},"起来":{p:"qǐlái",r:"вставать"},"生":{p:"shēng",r:"рождать"},"死":{p:"sǐ",r:"умереть"},"笑":{p:"xiào",r:"смеяться"},"哭":{p:"kū",r:"плакать"},"唱歌":{p:"chànggē",r:"петь"},"跳舞":{p:"tiàowǔ",r:"танцевать"},"画画":{p:"huàhuà",r:"рисовать"},"做饭":{p:"zuòfàn",r:"готовить"},"洗":{p:"xǐ",r:"мыть"},"洗澡":{p:"xǐzǎo",r:"мыться"},"见面":{p:"jiànmiàn",r:"встречаться"},"参加":{p:"cānjiā",r:"участвовать"},"准备":{p:"zhǔnbèi",r:"готовиться"},"决定":{p:"juédìng",r:"решать"},"选择":{p:"xuǎnzé",r:"выбирать"},"发现":{p:"fāxiàn",r:"обнаруживать"},"解决":{p:"jiějué",r:"решать (проблему)"},"研究":{p:"yánjiū",r:"исследовать"},"讨论":{p:"tǎolùn",r:"обсуждать"},"介绍":{p:"jièshào",r:"представлять"},"解释":{p:"jiěshì",r:"объяснять"},"比较":{p:"bǐjiào",r:"сравнивать"},"表示":{p:"biǎoshì",r:"выражать"},"影响":{p:"yǐngxiǎng",r:"влиять"},"包括":{p:"bāokuò",r:"включать"},"发生":{p:"fāshēng",r:"происходить"},"出现":{p:"chūxiàn",r:"появляться"},"离开":{p:"líkāi",r:"покидать"},"忘记":{p:"wàngjì",r:"забывать"},"记得":{p:"jìde",r:"помнить"},"理解":{p:"lǐjiě",r:"понимать"},"明白":{p:"míngbai",r:"понимать"},"检查":{p:"jiǎnchá",r:"проверять"},"练习":{p:"liànxí",r:"тренироваться"},"复习":{p:"fùxí",r:"повторять"},"翻译":{p:"fānyì",r:"переводить"},"思考":{p:"sīkǎo",r:"размышлять"},"改变":{p:"gǎibiàn",r:"изменять"},"发展":{p:"fāzhǎn",r:"развиваться"},"提高":{p:"tígāo",r:"повышать"},"保护":{p:"bǎohù",r:"защищать"},"支持":{p:"zhīchí",r:"поддерживать"},"接受":{p:"jiēshòu",r:"принимать"},"拒绝":{p:"jùjué",r:"отказываться"},"完成":{p:"wánchéng",r:"завершать"},"感到":{p:"gǎndào",r:"чувствовать"},"看到":{p:"kàndào",r:"увидеть"},"听到":{p:"tīngdào",r:"услышать"},"得到":{p:"dédào",r:"получить"},"想到":{p:"xiǎngdào",r:"подумать"},"找到":{p:"zhǎodào",r:"найти"},"达到":{p:"dádào",r:"достигать"},"认为":{p:"rènwéi",r:"считать"},"成为":{p:"chéngwéi",r:"становиться"},"很":{p:"hěn",r:"очень"},"太":{p:"tài",r:"слишком"},"最":{p:"zuì",r:"самый"},"更":{p:"gèng",r:"ещё более"},"都":{p:"dōu",r:"все"},"也":{p:"yě",r:"тоже"},"还":{p:"hái",r:"ещё"},"就":{p:"jiù",r:"тогда"},"才":{p:"cái",r:"только что"},"又":{p:"yòu",r:"снова"},"再":{p:"zài",r:"снова"},"已经":{p:"yǐjīng",r:"уже"},"正在":{p:"zhèngzài",r:"сейчас"},"马上":{p:"mǎshàng",r:"сейчас же"},"一起":{p:"yìqǐ",r:"вместе"},"常常":{p:"chángcháng",r:"часто"},"经常":{p:"jīngcháng",r:"часто"},"有时":{p:"yǒushí",r:"иногда"},"永远":{p:"yǒngyuǎn",r:"навсегда"},"突然":{p:"tūrán",r:"вдруг"},"慢慢":{p:"mànmàn",r:"постепенно"},"真":{p:"zhēn",r:"правда"},"特别":{p:"tèbié",r:"особенный"},"可能":{p:"kěnéng",r:"возможно"},"一定":{p:"yídìng",r:"обязательно"},"当然":{p:"dāngrán",r:"конечно"},"其实":{p:"qíshí",r:"на самом деле"},"大概":{p:"dàgài",r:"примерно"},"几乎":{p:"jīhū",r:"почти"},"只":{p:"zhǐ",r:"только"},"别":{p:"bié",r:"не (запрет)"},"和":{p:"hé",r:"и"},"但是":{p:"dànshì",r:"но"},"但":{p:"dàn",r:"но"},"因为":{p:"yīnwèi",r:"потому что"},"所以":{p:"suǒyǐ",r:"поэтому"},"如果":{p:"rúguǒ",r:"если"},"虽然":{p:"suīrán",r:"хотя"},"或者":{p:"huòzhě",r:"или"},"还是":{p:"háishi",r:"или (в вопросе)"},"而且":{p:"érqiě",r:"и, к тому же"},"年":{p:"nián",r:"год"},"月":{p:"yuè",r:"месяц"},"日":{p:"rì",r:"день"},"天":{p:"tiān",r:"день"},"时":{p:"shí",r:"час"},"时候":{p:"shíhou",r:"время"},"时间":{p:"shíjiān",r:"время"},"分":{p:"fēn",r:"минута"},"钟":{p:"zhōng",r:"часы"},"今天":{p:"jīntiān",r:"сегодня"},"明天":{p:"míngtiān",r:"завтра"},"昨天":{p:"zuótiān",r:"вчера"},"现在":{p:"xiànzài",r:"сейчас"},"以前":{p:"yǐqián",r:"раньше"},"以后":{p:"yǐhòu",r:"потом"},"上午":{p:"shàngwǔ",r:"утро"},"下午":{p:"xiàwǔ",r:"после полудня"},"早上":{p:"zǎoshang",r:"утро"},"晚上":{p:"wǎnshang",r:"вечер"},"中午":{p:"zhōngwǔ",r:"полдень"},"星期":{p:"xīngqī",r:"неделя"},"点":{p:"diǎn",r:"час (время)"},"家":{p:"jiā",r:"дом, семья"},"爸爸":{p:"bàba",r:"папа"},"妈妈":{p:"māma",r:"мама"},"父亲":{p:"fùqīn",r:"отец"},"母亲":{p:"mǔqīn",r:"мать"},"儿子":{p:"érzi",r:"сын"},"女儿":{p:"nǚ'ér",r:"дочь"},"哥哥":{p:"gēge",r:"старший брат"},"弟弟":{p:"dìdi",r:"младший брат"},"姐姐":{p:"jiějie",r:"старшая сестра"},"妹妹":{p:"mèimei",r:"младшая сестра"},"丈夫":{p:"zhàngfu",r:"муж"},"妻子":{p:"qīzi",r:"жена"},"先生":{p:"xiānsheng",r:"господин"},"小姐":{p:"xiǎojiě",r:"девушка"},"朋友":{p:"péngyou",r:"друг"},"同学":{p:"tóngxué",r:"одноклассник"},"老师":{p:"lǎoshī",r:"учитель"},"学生":{p:"xuésheng",r:"студент"},"孩子":{p:"háizi",r:"ребёнок"},"人":{p:"rén",r:"человек"},"人民":{p:"rénmín",r:"народ"},"水":{p:"shuǐ",r:"вода"},"茶":{p:"chá",r:"чай"},"咖啡":{p:"kāfēi",r:"кофе"},"饭":{p:"fàn",r:"еда"},"菜":{p:"cài",r:"блюдо"},"米":{p:"mǐ",r:"рис"},"面":{p:"miàn",r:"лапша"},"肉":{p:"ròu",r:"мясо"},"鱼":{p:"yú",r:"рыба"},"鸡":{p:"jī",r:"курица"},"蛋":{p:"dàn",r:"яйцо"},"牛奶":{p:"niúnǎi",r:"молоко"},"酒":{p:"jiǔ",r:"алкоголь"},"水果":{p:"shuǐguǒ",r:"фрукты"},"苹果":{p:"píngguǒ",r:"яблоко"},"面包":{p:"miànbāo",r:"хлеб"},"糖":{p:"táng",r:"сахар"},"盐":{p:"yán",r:"соль"},"汤":{p:"tāng",r:"суп"},"碗":{p:"wǎn",r:"чашка"},"杯子":{p:"bēizi",r:"стакан"},"筷子":{p:"kuàizi",r:"палочки"},"中国":{p:"Zhōngguó",r:"Китай"},"北京":{p:"Běijīng",r:"Пекин"},"上海":{p:"Shànghǎi",r:"Шанхай"},"学校":{p:"xuéxiào",r:"школа"},"医院":{p:"yīyuàn",r:"больница"},"商店":{p:"shāngdiàn",r:"магазин"},"饭店":{p:"fàndiàn",r:"ресторан"},"公司":{p:"gōngsī",r:"компания"},"银行":{p:"yínháng",r:"банк"},"机场":{p:"jīchǎng",r:"аэропорт"},"火车站":{p:"huǒchēzhàn",r:"вокзал"},"地铁":{p:"dìtiě",r:"метро"},"路":{p:"lù",r:"дорога"},"城市":{p:"chéngshì",r:"город"},"国家":{p:"guójiā",r:"страна"},"世界":{p:"shìjiè",r:"мир"},"地方":{p:"dìfāng",r:"место"},"里":{p:"lǐ",r:"внутри"},"外":{p:"wài",r:"снаружи"},"上":{p:"shàng",r:"верх"},"下":{p:"xià",r:"низ"},"前":{p:"qián",r:"перед"},"后":{p:"hòu",r:"после"},"左":{p:"zuǒ",r:"левый"},"右":{p:"yòu",r:"правый"},"中":{p:"zhōng",r:"середина"},"旁边":{p:"pángbiān",r:"рядом"},"对面":{p:"duìmiàn",r:"напротив"},"附近":{p:"fùjìn",r:"поблизости"},"远":{p:"yuǎn",r:"далеко"},"近":{p:"jìn",r:"близко"},"房间":{p:"fángjiān",r:"комната"},"厨房":{p:"chúfáng",r:"кухня"},"厕所":{p:"cèsuǒ",r:"туалет"},"公园":{p:"gōngyuán",r:"парк"},"图书馆":{p:"túshūguǎn",r:"библиотека"},"博物馆":{p:"bówùguǎn",r:"музей"},"市场":{p:"shìchǎng",r:"рынок"},"超市":{p:"chāoshì",r:"супермаркет"},"首都":{p:"shǒudū",r:"столица"},"街":{p:"jiē",r:"улица"},"山":{p:"shān",r:"гора"},"河":{p:"hé",r:"река"},"海":{p:"hǎi",r:"море"},"湖":{p:"hú",r:"озеро"},"树":{p:"shù",r:"дерево"},"花":{p:"huā",r:"цветок"},"草":{p:"cǎo",r:"трава"},"风":{p:"fēng",r:"ветер"},"雨":{p:"yǔ",r:"дождь"},"雪":{p:"xuě",r:"снег"},"云":{p:"yún",r:"облако"},"火":{p:"huǒ",r:"огонь"},"春":{p:"chūn",r:"весна"},"夏天":{p:"xiàtiān",r:"лето"},"秋":{p:"qiū",r:"осень"},"冬":{p:"dōng",r:"зима"},"太阳":{p:"tàiyáng",r:"солнце"},"月亮":{p:"yuèliang",r:"луна"},"星星":{p:"xīngxing",r:"звезда"},"天气":{p:"tiānqì",r:"погода"},"空气":{p:"kōngqì",r:"воздух"},"温度":{p:"wēndù",r:"температура"},"地球":{p:"dìqiú",r:"Земля"},"自然":{p:"zìrán",r:"природа"},"光":{p:"guāng",r:"свет"},"声音":{p:"shēngyīn",r:"звук"},"头":{p:"tóu",r:"голова"},"眼睛":{p:"yǎnjing",r:"глаза"},"耳朵":{p:"ěrduo",r:"ухо"},"嘴":{p:"zuǐ",r:"рот"},"鼻子":{p:"bízi",r:"нос"},"手":{p:"shǒu",r:"рука"},"脚":{p:"jiǎo",r:"нога"},"心":{p:"xīn",r:"сердце"},"身体":{p:"shēntǐ",r:"тело"},"头发":{p:"tóufa",r:"волосы"},"书":{p:"shū",r:"книга"},"字":{p:"zì",r:"иероглиф"},"笔":{p:"bǐ",r:"ручка"},"纸":{p:"zhǐ",r:"бумага"},"桌子":{p:"zhuōzi",r:"стол"},"椅子":{p:"yǐzi",r:"стул"},"门":{p:"mén",r:"дверь"},"窗户":{p:"chuānghu",r:"окно"},"床":{p:"chuáng",r:"кровать"},"电话":{p:"diànhuà",r:"телефон"},"电脑":{p:"diànnǎo",r:"компьютер"},"手机":{p:"shǒujī",r:"телефон"},"车":{p:"chē",r:"машина"},"火车":{p:"huǒchē",r:"поезд"},"飞机":{p:"fēijī",r:"самолёт"},"衣服":{p:"yīfu",r:"одежда"},"鞋":{p:"xié",r:"обувь"},"眼镜":{p:"yǎnjìng",r:"очки"},"钱":{p:"qián",r:"деньги"},"块":{p:"kuài",r:"юань (разг.)"},"元":{p:"yuán",r:"юань"},"票":{p:"piào",r:"билет"},"东西":{p:"dōngxi",r:"вещь"},"名字":{p:"míngzi",r:"имя"},"号":{p:"hào",r:"номер"},"照片":{p:"zhàopiàn",r:"фотография"},"帽子":{p:"màozi",r:"шапка"},"手表":{p:"shǒubiǎo",r:"часы"},"地图":{p:"dìtú",r:"карта"},"大":{p:"dà",r:"большой"},"小":{p:"xiǎo",r:"маленький"},"多":{p:"duō",r:"много"},"少":{p:"shǎo",r:"мало"},"好":{p:"hǎo",r:"хороший"},"坏":{p:"huài",r:"плохой"},"高":{p:"gāo",r:"высокий"},"低":{p:"dī",r:"низкий"},"长":{p:"cháng",r:"длинный"},"短":{p:"duǎn",r:"короткий"},"新":{p:"xīn",r:"новый"},"旧":{p:"jiù",r:"старый"},"老":{p:"lǎo",r:"старый"},"年轻":{p:"niánqīng",r:"молодой"},"快":{p:"kuài",r:"быстрый"},"慢":{p:"màn",r:"медленный"},"冷":{p:"lěng",r:"холодный"},"热":{p:"rè",r:"горячий"},"忙":{p:"máng",r:"занятой"},"累":{p:"lèi",r:"усталый"},"高兴":{p:"gāoxìng",r:"радостный"},"漂亮":{p:"piàoliang",r:"красивый"},"美丽":{p:"měilì",r:"прекрасный"},"难":{p:"nán",r:"трудный"},"容易":{p:"róngyì",r:"лёгкий"},"重要":{p:"zhòngyào",r:"важный"},"白":{p:"bái",r:"белый"},"黑":{p:"hēi",r:"чёрный"},"红":{p:"hóng",r:"красный"},"蓝":{p:"lán",r:"синий"},"绿":{p:"lǜ",r:"зелёный"},"黄":{p:"huáng",r:"жёлтый"},"开心":{p:"kāixīn",r:"счастливый"},"难过":{p:"nánguò",r:"грустный"},"生气":{p:"shēngqì",r:"злой"},"害怕":{p:"hàipà",r:"бояться"},"便宜":{p:"piányi",r:"дешёвый"},"贵":{p:"guì",r:"дорогой"},"干净":{p:"gānjìng",r:"чистый"},"简单":{p:"jiǎndān",r:"простой"},"复杂":{p:"fùzá",r:"сложный"},"一般":{p:"yībān",r:"обычный"},"幸福":{p:"xìngfú",r:"счастье"},"健康":{p:"jiànkāng",r:"здоровье"},"安全":{p:"ānquán",r:"безопасность"},"危险":{p:"wēixiǎn",r:"опасность"},"成功":{p:"chénggōng",r:"успех"},"失败":{p:"shībài",r:"неудача"},"中文":{p:"Zhōngwén",r:"китайский язык"},"汉语":{p:"Hànyǔ",r:"китайский язык"},"英语":{p:"Yīngyǔ",r:"английский язык"},"俄语":{p:"Éyǔ",r:"русский язык"},"日语":{p:"Rìyǔ",r:"японский язык"},"语言":{p:"yǔyán",r:"язык"},"课":{p:"kè",r:"урок"},"考试":{p:"kǎoshì",r:"экзамен"},"问题":{p:"wèntí",r:"вопрос"},"意思":{p:"yìsi",r:"значение"},"文化":{p:"wénhuà",r:"культура"},"历史":{p:"lìshǐ",r:"история"},"科学":{p:"kēxué",r:"наука"},"数学":{p:"shùxué",r:"математика"},"音乐":{p:"yīnyuè",r:"музыка"},"电影":{p:"diànyǐng",r:"фильм"},"新闻":{p:"xīnwén",r:"новости"},"报纸":{p:"bàozhǐ",r:"газета"},"杂志":{p:"zázhì",r:"журнал"},"教育":{p:"jiàoyù",r:"образование"},"知识":{p:"zhīshi",r:"знание"},"技术":{p:"jìshù",r:"технология"},"传统":{p:"chuántǒng",r:"традиция"},"节日":{p:"jiérì",r:"праздник"},"春节":{p:"Chūnjié",r:"Праздник весны"},"礼物":{p:"lǐwù",r:"подарок"},"你好":{p:"nǐ hǎo",r:"здравствуйте"},"再见":{p:"zàijiàn",r:"до свидания"},"对不起":{p:"duìbuqǐ",r:"извините"},"没关系":{p:"méi guānxi",r:"ничего страшного"},"不客气":{p:"bú kèqi",r:"не за что"},"欢迎":{p:"huānyíng",r:"добро пожаловать"},"生日":{p:"shēngrì",r:"день рождения"},"快乐":{p:"kuàilè",r:"счастливый"},"个":{p:"gè",r:"счётное слово"},"本":{p:"běn",r:"счётное слово (книги)"},"条":{p:"tiáo",r:"счётное слово (длинное)"},"把":{p:"bǎ",r:"счётное слово"},"位":{p:"wèi",r:"счётное слово (вежл.)"},"些":{p:"xiē",r:"несколько"},"件":{p:"jiàn",r:"счётное слово (вещи)"},"的":{p:"de",r:"притяж. частица"},"了":{p:"le",r:"частица завершённости"},"着":{p:"zhe",r:"частица продолженности"},"过":{p:"guò",r:"частица опыта"},"吗":{p:"ma",r:"вопрос. частица"},"呢":{p:"ne",r:"частица вопроса"},"吧":{p:"ba",r:"частица предложения"},"啊":{p:"a",r:"восклиц. частица"},"从":{p:"cóng",r:"от, из"},"向":{p:"xiàng",r:"к"},"关于":{p:"guānyú",r:"о"},"为了":{p:"wèile",r:"для"},"除了":{p:"chúle",r:"кроме"},"通过":{p:"tōngguò",r:"через"},"被":{p:"bèi",r:"пассивный предлог"},"事":{p:"shì",r:"дело"},"事情":{p:"shìqing",r:"дело, событие"},"话":{p:"huà",r:"речь"},"生活":{p:"shēnghuó",r:"жизнь"},"关系":{p:"guānxi",r:"отношения"},"机会":{p:"jīhuì",r:"возможность"},"结果":{p:"jiéguǒ",r:"результат"},"目的":{p:"mùdì",r:"цель"},"自由":{p:"zìyóu",r:"свобода"},"病":{p:"bìng",r:"болезнь"},"药":{p:"yào",r:"лекарство"},"医生":{p:"yīshēng",r:"врач"},"颜色":{p:"yánsè",r:"цвет"},"每":{p:"měi",r:"каждый"},"所有":{p:"suǒyǒu",r:"все"},"其他":{p:"qítā",r:"другой"},"网络":{p:"wǎngluò",r:"интернет"},"旅游":{p:"lǚyóu",r:"путешествие"},"运动":{p:"yùndòng",r:"спорт"},"动物":{p:"dòngwù",r:"животное"},"猫":{p:"māo",r:"кошка"},"狗":{p:"gǒu",r:"собака"},"鸟":{p:"niǎo",r:"птица"},"马":{p:"mǎ",r:"лошадь"},"龙":{p:"lóng",r:"дракон"},"老虎":{p:"lǎohǔ",r:"тигр"},"大象":{p:"dàxiàng",r:"слон"},"牛":{p:"niú",r:"корова"},"猪":{p:"zhū",r:"свинья"},"兴趣":{p:"xìngqù",r:"интерес"},"爱好":{p:"àihào",r:"хобби"},"能力":{p:"nénglì",r:"способность"},"经验":{p:"jīngyàn",r:"опыт"},"环境":{p:"huánjìng",r:"окружающая среда"},"信息":{p:"xìnxī",r:"информация"},"网站":{p:"wǎngzhàn",r:"сайт"},"篮球":{p:"lánqiú",r:"баскетбол"},"足球":{p:"zúqiú",r:"футбол"},"乒乓球":{p:"pīngpāngqiú",r:"пинг-понг"},"游泳":{p:"yóuyǒng",r:"плавание"},"公共汽车":{p:"gōnggòng qìchē",r:"автобус"},"出租车":{p:"chūzūchē",r:"такси"},"社会":{p:"shèhuì",r:"общество"},"经济":{p:"jīngjì",r:"экономика"},"政治":{p:"zhèngzhì",r:"политика"},"政府":{p:"zhèngfǔ",r:"правительство"},"法律":{p:"fǎlǜ",r:"закон"},"方法":{p:"fāngfǎ",r:"метод"},"情况":{p:"qíngkuàng",r:"ситуация"},"感情":{p:"gǎnqíng",r:"чувства"},"习惯":{p:"xíguàn",r:"привычка"},"条件":{p:"tiáojiàn",r:"условие"},"态度":{p:"tàidù",r:"отношение"},"精神":{p:"jīngshén",r:"дух"},"思想":{p:"sīxiǎng",r:"мысль"},"记忆":{p:"jìyì",r:"память"},"爱情":{p:"àiqíng",r:"любовь"},"友谊":{p:"yǒuyì",r:"дружба"},"婚姻":{p:"hūnyīn",r:"брак"},"梦想":{p:"mèngxiǎng",r:"мечта"},"民族":{p:"mínzú",r:"нация"},"道德":{p:"dàodé",r:"мораль"},"责任":{p:"zérèn",r:"ответственность"},"权利":{p:"quánlì",r:"право"},"活动":{p:"huódòng",r:"мероприятие"},"组织":{p:"zǔzhī",r:"организация"},"计划":{p:"jìhuà",r:"план"},"设计":{p:"shèjì",r:"дизайн"},"系统":{p:"xìtǒng",r:"система"},"标准":{p:"biāozhǔn",r:"стандарт"},"质量":{p:"zhìliàng",r:"качество"},"数量":{p:"shùliàng",r:"количество"},"速度":{p:"sùdù",r:"скорость"},"水平":{p:"shuǐpíng",r:"уровень"},"程度":{p:"chéngdù",r:"степень"},"效果":{p:"xiàoguǒ",r:"эффект"},"成绩":{p:"chéngjì",r:"успеваемость"},"特点":{p:"tèdiǎn",r:"особенность"},"内容":{p:"nèiróng",r:"содержание"},"形式":{p:"xíngshì",r:"форма"},"结构":{p:"jiégòu",r:"структура"},"过程":{p:"guòchéng",r:"процесс"},"现象":{p:"xiànxiàng",r:"явление"},"规律":{p:"guīlǜ",r:"закон"},"原则":{p:"yuánzé",r:"принцип"},"部分":{p:"bùfen",r:"часть"},"方面":{p:"fāngmiàn",r:"сторона"},"作用":{p:"zuòyòng",r:"действие"},"基础":{p:"jīchǔ",r:"основа"},"建设":{p:"jiànshè",r:"строительство"},"制度":{p:"zhìdù",r:"система"},"管理":{p:"guǎnlǐ",r:"управление"},"服务":{p:"fúwù",r:"обслуживание"},"生产":{p:"shēngchǎn",r:"производство"},"形状":{p:"xíngzhuàng",r:"форма"},"大小":{p:"dàxiǎo",r:"размер"},"距离":{p:"jùlí",r:"расстояние"},"方向":{p:"fāngxiàng",r:"направление"},"位置":{p:"wèizhì",r:"позиция"},"中心":{p:"zhōngxīn",r:"центр"},"空间":{p:"kōngjiān",r:"пространство"}};
+
+function isChinese(ch){const code=ch.charCodeAt(0);return(code>=0x4E00&&code<=0x9FFF)||(code>=0x3400&&code<=0x4DBF)||(code>=0x20000&&code<=0x2A6DF)}
+function splitSentences(text){const sentences=[];let current='';for(const ch of text){current+=ch;if(/[。！？；\n]/.test(ch)){const trimmed=current.trim();if(trimmed)sentences.push(trimmed);current=''}}const remaining=current.trim();if(remaining)sentences.push(remaining);return sentences}
+function getAutoPinyin(ch){if(typeof pinyinPro!=='undefined'&&pinyinPro.pinyin){return pinyinPro.pinyin(ch,{toneType:'symbol',type:'string'}).trim()}return''}
+function parseSentence(sentence){const result=[];let i=0;while(i<sentence.length){let found=false;for(let len=4;len>=2;len--){if(i+len<=sentence.length){const sub=sentence.substring(i,i+len);if(DICT[sub]){result.push({char:sub,pinyin:DICT[sub].p,ru:DICT[sub].r,isChinese:true});i+=len;found=true;break}}}if(!found){const ch=sentence[i];if(isChinese(ch)){const entry=DICT[ch];const pin=entry?entry.p:getAutoPinyin(ch);result.push({char:ch,pinyin:pin,ru:entry?entry.r:'',isChinese:true})}else{const last=result[result.length-1];if(last&&!last.isChinese){last.char+=ch}else{result.push({char:ch,pinyin:'',ru:'',isChinese:false})}}i++}}return result}
 async function translateSentenceAI(text){if(!text.trim())return'';try{const url=`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=zh|ru`;const res=await fetch(url);if(!res.ok)throw new Error('API error');const data=await res.json();if(data.responseStatus===200&&data.responseData?.translated){const t=data.responseData.translated.trim();if(t&&t!==text&&!/^[\s\u4e00-\u9fff]+$/.test(t))return t}if(data.matches&&data.matches.length>0){const best=data.matches.filter(m=>m.translation&&m.translation!==text).sort((a,b)=>(parseInt(b.quality)||0)-(parseInt(a.quality)||0))[0];if(best?.translation)return best.translation.trim()}throw new Error('Нет перевода')}catch(e){const words=parseSentence(text);return words.filter(w=>w.ru&&isChinese(w.char[0])).map(w=>w.ru).join(', ')||'—'}}
 
 let currentFontSize=32;let showTranslation=true;let activeTab='input';
